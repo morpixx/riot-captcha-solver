@@ -1,0 +1,35 @@
+services:
+  api:
+    build:
+      context: .
+      args:
+        CAMOUFOX_VERSION: "0.5.6"
+    image: riot-email-automation:latest
+    env_file:
+      - .env
+    environment:
+      BIND_HOST: 0.0.0.0
+      PORT: "8000"
+      HEADLESS: "1"
+      JOBS_DB: /app/data/jobs.sqlite3
+      MAX_WORKERS: "${DOCKER_MAX_WORKERS:-4}"
+      MIN_FREE_MB: "${DOCKER_MIN_FREE_MB:-1024}"
+    ports:
+      - "${RIOT_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    shm_size: "2gb"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3

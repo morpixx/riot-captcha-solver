@@ -1,0 +1,54 @@
+# Secrets and runtime data — never commit.
+.env
+.env.*
+!.env.example
+cookies*.json
+accounts*.json
+accounts*.jsonl
+accounts*.jsonl.bak
+batch.json
+proxies*.txt
+emails.txt
+data/input/emails*.txt
+results*.jsonl
+job-results*.jsonl
+webhook-results*.jsonl
+token.txt
+deploy/*.local.yml
+
+# Queue and generated output.
+jobs.sqlite3
+jobs.sqlite3-*
+*.sqlite3
+*.sqlite3-*
+data/output/*
+*.log
+*.bak
+
+# Local browser/profile/cache state.
+.riot-mem/
+camoufox-profiles/
+.cache/
+.kaggle/
+
+# Python / tooling caches and packaging artifacts.
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.ipynb_checkpoints/
+
+# OS/editor/tooling noise.
+.DS_Store
+Thumbs.db
+.idea/
+node_modules/
+*.tmp
+*.zip
+*.7z

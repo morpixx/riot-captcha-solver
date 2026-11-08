@@ -1,0 +1,8 @@
+version: "3"
+# Замени authtoken и domain. Запуск: ngrok start --config deploy/ngrok.yml riot-api
+authtoken: REPLACE_WITH_NGROK_TOKEN
+tunnels:
+  riot-api:
+    proto: http
+    addr: 8000
+    domain: your-name.ngrok-free.app
