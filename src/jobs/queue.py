@@ -340,6 +340,7 @@ class JobQueue:
         counts.update(self.store.status_counts(client_id))
         durations = self.store.successful_durations(client_id)
         errors = self.store.dead_error_counts(client_id)
+        should_poll = self.store.should_poll_counts(client_id)
         dead_proxies = self.store.dead_proxy_count()
 
         free_mb = None
@@ -370,6 +371,7 @@ class JobQueue:
                 "max": max(durations) if durations else None,
             },
             "errors": errors,
+            "should_poll": should_poll,
             "dead_proxies": int(dead_proxies),
             "cookies_in_memory": cookies_in_memory,
         }

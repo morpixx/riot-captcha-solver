@@ -17,6 +17,7 @@ project.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import logging
 import os
@@ -49,6 +50,25 @@ IP_SERVICES = (
     "https://icanhazip.com",
     "https://ifconfig.me/ip",
 )
+
+# Sticky proxies keep the same exit IP for minutes. Re-probing it for every
+# job costs up to four HTTPS round-trips through the proxy; cache it briefly.
+_GEOIP_CACHE: dict[str, tuple[float, str]] = {}
+_GEOIP_LOCK = threading.Lock()
+
+
+def _proxy_fingerprint(proxy: dict) -> str:
+    raw = "|".join(
+        str(proxy.get(field) or "") for field in ("server", "username", "password")
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _geoip_ttl() -> float:
+    try:
+        return max(0.0, float(os.getenv("GEOIP_CACHE_TTL", "120")))
+    except ValueError:
+        return 120.0
 
 
 def _proxy_url(proxy: dict | None) -> str | None:
@@ -83,15 +103,29 @@ def _resolve_exit_ip(proxy: dict | None, timeout: float = 10.0) -> str | None:
     it here means a dead proxy fails with a clear message before a browser is
     started, and credentials with special characters are encoded correctly.
     """
+    key = _proxy_fingerprint(proxy) if proxy else None
+    ttl = _geoip_ttl()
+    if key and ttl > 0:
+        with _GEOIP_LOCK:
+            cached = _GEOIP_CACHE.get(key)
+        if cached is not None and time.monotonic() - cached[0] < ttl:
+            return cached[1]
+
     proxy_url = _proxy_url(proxy) if proxy else None
     with requests.Session() as session:
         # Do not let HTTP_PROXY/HTTPS_PROXY from the host decide the exit IP.
         session.trust_env = False
         if proxy_url:
             session.proxies = {"http": proxy_url, "https": proxy_url}
+        # Bound the whole probe, not every service: a dead proxy used to cost
+        # up to 4 x 10 s before the job failed.
+        deadline = time.monotonic() + max(1.0, timeout)
         for service in IP_SERVICES:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                response = session.get(service, timeout=timeout)
+                response = session.get(service, timeout=min(4.0, remaining))
                 if response.status_code != 200:
                     continue
                 candidate = response.text.strip()
@@ -99,6 +133,9 @@ def _resolve_exit_ip(proxy: dict | None, timeout: float = 10.0) -> str | None:
                     ipaddress.ip_address(candidate)
                 except ValueError:
                     continue
+                if key and ttl > 0:
+                    with _GEOIP_LOCK:
+                        _GEOIP_CACHE[key] = (time.monotonic(), candidate)
                 return candidate
             except requests.RequestException:
                 continue
@@ -321,8 +358,11 @@ def open_browser(
         options["user_data_dir"] = str(profile)
 
         with Camoufox(**options) as context:
-            memory = _MemoryMonitor(profile, label or "browser")
-            memory.start()
+            # Sampling every browser process tree costs a full process scan
+            # each second; keep it for diagnostics, not for production runs.
+            if env_flag("CAMOUFOX_MEMORY_LOG", default=False):
+                memory = _MemoryMonitor(profile, label or "browser", interval=2.0)
+                memory.start()
             if env_flag("CAMOUFOX_BLOCK_RESOURCES", default=False):
                 install_resource_blocking(context)
             if cookies:
@@ -348,7 +388,10 @@ def open_browser(
     finally:
         if memory is not None:
             memory.stop()
-        _wait_for_browser_exit(profile)
+            # Only the diagnostics path waits for the process table; normal
+            # cleanup relies on Playwright closing the browser and on the
+            # retry loop in _remove_profile.
+            _wait_for_browser_exit(profile, timeout=3.0)
         _remove_profile(profile)
 
 

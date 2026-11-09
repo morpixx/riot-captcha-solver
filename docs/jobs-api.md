@@ -102,6 +102,9 @@ POST /api/v1/jobs/{id}/cancel
 GET /api/v1/stats
 ```
 
+`/api/v1/stats` возвращает в том числе `should_poll: {"true": N, "false": M}` —
+сколько завершённых job'ов Riot принял и сколько отклонил.
+
 Основной способ получить результат — `webhook_url` в job'е/batch. Сервер
 отправляет `POST` только при переходе в терминальный статус (`succeeded`,
 `dead`, `canceled`, `needs_resubmit`) с payload'ом:

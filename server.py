@@ -30,13 +30,13 @@ SQLite (jobs.sqlite3) хранит только метаданные job'ов, �
     RATE_LIMIT_PER_MIN — запросов /jobs и /job в минуту на клиента (1200)
     JOBS_DB         — путь к SQLite (по умолчанию jobs.sqlite3)
     SHUTDOWN_TIMEOUT — сколько ждать завершения running-джоб при остановке (10)
-    ENABLE_SYNC_RUN — 0 отключает синхронный /run (для production-очереди)
+    ENABLE_SYNC_RUN — 1 включает синхронный /run; по умолчанию 0 (production-очередь)
     ALLOW_NO_PROXY — 1 разрешает job/run без proxy (только локальные тесты)
     HEADLESS        — 0 включает видимое окно; по умолчанию headless (job может переопределить)
     SITEKEY/HOST    — параметры hCaptcha (по умолчанию — Riot)
     RUN_TIMEOUT     — таймаут синхронного /run, сек (0 — без таймаута)
     BIND_HOST/PORT  — адрес uvicorn в __main__ (0.0.0.0:8000)
-    ENABLE_DOCS     — 0 отключает /docs, /redoc, /openapi.json (для выдачи наружу)
+    ENABLE_DOCS     — 1 включает /docs, /redoc, /openapi.json; по умолчанию 0
     LOG_LEVEL       — уровень логирования (INFO)
     WEBHOOK_URL     — общий fallback-адрес, если job не передал свой webhook_url
     WEBHOOK_PROXY_URL — опциональный локальный приёмник; пусто = писать
@@ -44,6 +44,7 @@ SQLite (jobs.sqlite3) хранит только метаданные job'ов, �
     WEBHOOK_SECRET  — секрет HMAC-SHA256 для X-Webhook-Signature
     WEBHOOK_TIMEOUT — таймаут одного POST на webhook, сек (5)
     WEBHOOK_RETRIES — попыток доставки webhook (3)
+    WEBHOOK_WORKERS — параллельных доставок webhook (2)
 """
 
 from __future__ import annotations
@@ -126,12 +127,13 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 WEBHOOK_TIMEOUT = float(os.getenv("WEBHOOK_TIMEOUT", "5") or 5)
 WEBHOOK_RETRIES = max(1, int(os.getenv("WEBHOOK_RETRIES", "3")))
+WEBHOOK_WORKERS = max(1, int(os.getenv("WEBHOOK_WORKERS", "2")))
 if WEBHOOK_URL and not WEBHOOK_URL.startswith(("http://", "https://")):
     raise RuntimeError("WEBHOOK_URL must start with http:// or https://")
 
 
 API_KEYS_MAP = load_api_keys(API_KEY, os.getenv("API_KEYS", ""))
-DOCS_ENABLED = env_flag("ENABLE_DOCS", default=True)
+DOCS_ENABLED = env_flag("ENABLE_DOCS", default=False)
 
 
 def _ts() -> str:
@@ -192,6 +194,7 @@ async def lifespan(app: FastAPI):
             secret=WEBHOOK_SECRET,
             timeout=WEBHOOK_TIMEOUT,
             retries=WEBHOOK_RETRIES,
+            workers=WEBHOOK_WORKERS,
         ),
         post=requests.post,
     )
@@ -200,13 +203,15 @@ async def lifespan(app: FastAPI):
     job_queue.terminal_callback = _enqueue_webhook
     job_queue.start()
     log.info(
-        "[%s] START workers=%d api_key=%s timeout=%s queue_db=%s webhook_fallback=%s",
+        "[%s] START workers=%d api_key=%s timeout=%s queue_db=%s"
+        " webhook_fallback=%s webhook_workers=%d",
         _ts(),
         MAX_WORKERS,
         "on" if API_KEYS_MAP else "off",
         RUN_TIMEOUT or "none",
         job_queue.db_path,
         "on" if WEBHOOK_URL else "off",
+        WEBHOOK_WORKERS,
     )
     try:
         yield
@@ -325,7 +330,7 @@ def run_endpoint(req: RunRequest, client_id: str = Depends(require_client)) -> R
     ограничен нашим ThreadPoolExecutor (MAX_WORKERS), поэтому event loop не блокируется
     и сервер не поднимает больше браузеров, чем разрешено.
     """
-    if not env_flag("ENABLE_SYNC_RUN", default=True):
+    if not env_flag("ENABLE_SYNC_RUN", default=False):
         raise HTTPException(
             status_code=403, detail="sync /api/v1/run is disabled; use /api/v1/jobs"
         )

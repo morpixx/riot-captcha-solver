@@ -171,6 +171,16 @@ def test_origin_and_token_errors_are_classified():
     code, retryable = classify_error(RuntimeError("hCaptcha returned an unusable token: prefix"))
     assert (code, retryable) == ("captcha_failed", True)
 
+    code, retryable = classify_error(
+        RuntimeError("Riot rejected the email change from the UI: 429 {'message': 'slow down'}")
+    )
+    assert (code, retryable) == ("rate_limited", True)
+
+    code, retryable = classify_error(
+        RuntimeError("Riot rejected the email change from the UI: 403 {'error': 'expired'}")
+    )
+    assert (code, retryable) == ("session_invalid", False)
+
 
 def test_token_problem_accepts_real_tokens():
     assert _token_problem("P1_" + "a" * 240, "sitekey") is None

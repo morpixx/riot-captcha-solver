@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import threading
+import time
 from types import SimpleNamespace
 
 from src.api.webhooks import WebhookDispatcher, WebhookSettings, build_body, build_headers
@@ -49,3 +51,24 @@ def test_dispatcher_posts_payload_and_stops():
     assert calls[0]["payload"]["id"] == "job-2"
     assert calls[0]["timeout"] == 2.0
     assert "X-Webhook-Signature" not in calls[0]["headers"]
+
+def test_dispatcher_delivers_events_with_multiple_workers():
+    calls: list[str] = []
+    lock = threading.Lock()
+
+    def fake_post(url, *, data, headers, timeout):
+        time.sleep(0.05)
+        with lock:
+            calls.append(json.loads(data)["id"])
+        return SimpleNamespace(status_code=204)
+
+    dispatcher = WebhookDispatcher(
+        WebhookSettings(secret="", timeout=1.0, retries=1, workers=4),
+        post=fake_post,
+    )
+    dispatcher.start()
+    for index in range(8):
+        dispatcher.enqueue("http://client.example/hook", {"id": f"job-{index}", "status": "dead"})
+    dispatcher.stop(drain_timeout=5.0)
+
+    assert sorted(calls) == [f"job-{index}" for index in range(8)]

@@ -74,6 +74,7 @@ def test_success_and_idempotency(tmp_path):
         assert not errors and duplicates == 0 and len(jobs) == 2
         stats = _wait_done(queue, "client", 2)
         assert stats["jobs"]["succeeded"] == 2
+        assert stats["should_poll"] == {"true": 2, "false": 0}
         assert stats["durations_ms"]["count"] == 2
         assert stats["durations_ms"]["avg"] is not None
         assert sorted(seen) == ["u1@example.com", "u2@example.com"]
@@ -130,6 +131,7 @@ def test_should_poll_false_needs_resubmit(tmp_path):
         assert not errors and len(jobs) == 1
         stats = _wait_done(queue, "client", 1)
         assert stats["jobs"]["needs_resubmit"] == 1
+        assert stats["should_poll"] == {"true": 0, "false": 1}
 
         job = queue.get(jobs[0].id, "client")
         assert job.status == "needs_resubmit"

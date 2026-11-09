@@ -31,6 +31,7 @@ class WebhookSettings:
     secret: str = ""
     timeout: float = 5.0
     retries: int = 3
+    workers: int = 2
 
 
 def build_body(payload: dict[str, Any]) -> bytes:
@@ -52,7 +53,11 @@ def build_headers(payload: dict[str, Any], body: bytes, secret: str = "") -> dic
 
 
 class WebhookDispatcher:
-    """A small single-worker queue used by the API lifespan."""
+    """A small delivery pool used by the API lifespan.
+
+    A slow client receiver must not serialize every terminal event behind one
+    HTTP request, so several workers read from the same queue.
+    """
 
     def __init__(
         self,
@@ -66,15 +71,19 @@ class WebhookDispatcher:
         self._log = log_fn
         self._queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self._stop = threading.Event()
-        self._thread = threading.Thread(
-            target=self._worker,
-            name="riot-webhook",
-            daemon=True,
-        )
+        self._threads = [
+            threading.Thread(
+                target=self._worker,
+                name=f"riot-webhook-{index}",
+                daemon=True,
+            )
+            for index in range(max(1, int(settings.workers)))
+        ]
 
     def start(self) -> None:
-        if not self._thread.is_alive():
-            self._thread.start()
+        for thread in self._threads:
+            if thread.ident is None:
+                thread.start()
 
     def enqueue(self, url: str, payload: dict[str, Any]) -> None:
         self._queue.put({"url": url, "payload": payload})
@@ -85,8 +94,9 @@ class WebhookDispatcher:
         while time.monotonic() < deadline and self._queue.unfinished_tasks:
             time.sleep(0.05)
         self._stop.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+        for thread in self._threads:
+            if thread.is_alive():
+                thread.join(timeout=2.0)
 
     def _worker(self) -> None:
         while not self._stop.is_set():

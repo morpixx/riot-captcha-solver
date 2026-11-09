@@ -109,6 +109,8 @@ src.jobs.result.interpret_result()
 - **src/browser/browser.py** — загрузка cookie и Camoufox entrypoint.
 - **src/browser/camoufox_browser.py** — Firefox-backend Camoufox: fingerprint,
   proxy, GeoIP, headless и временный профиль; тот же интерфейс context/page.
+  Профилирование RSS включается только через `CAMOUFOX_MEMORY_LOG=1`;
+  exit-IP sticky-прокси кешируется на `GEOIP_CACHE_TTL` секунд.
 - **src/browser/camoufox_boost.py** — оптимизация ресурсов (Python-порт Node-бустера Camoufox):
   Firefox-prefs, human-поведение; блокировка тяжёлых запросов — опционально
   (`CAMOUFOX_BLOCK_RESOURCES=1`).

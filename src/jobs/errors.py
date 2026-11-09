@@ -31,6 +31,12 @@ def classify_error(exc: BaseException) -> tuple[str, bool]:
     """Return ``(error_code, retryable)`` for a failed job attempt."""
     msg = f"{type(exc).__name__}: {exc}".lower()
 
+    if "429" in msg or "too many requests" in msg or "rate limit" in msg:
+        return "rate_limited", True
+    if "rejected the email change from the ui: 401" in msg or (
+        "rejected the email change from the ui: 403" in msg
+    ):
+        return "session_invalid", False
     if "no webgl data" in msg:
         return "browser_fingerprint", True
     if "session is not valid" in msg or "left the riot account origin" in msg:

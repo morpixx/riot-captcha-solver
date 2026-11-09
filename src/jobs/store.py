@@ -45,6 +45,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS jobs_client_external
 CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS jobs_updated ON jobs(updated_at);
 CREATE INDEX IF NOT EXISTS jobs_batch ON jobs(batch_id);
+CREATE INDEX IF NOT EXISTS jobs_client_proxy ON jobs(client_id, proxy_key);
+CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(status, priority DESC, created_at);
+CREATE INDEX IF NOT EXISTS jobs_status_duration ON jobs(status, client_id, duration_ms);
 CREATE TABLE IF NOT EXISTS proxy_health (
     key TEXT PRIMARY KEY,
     ok INTEGER NOT NULL,
@@ -324,6 +327,22 @@ class JobStore:
                 (client_id,) if client_id else (),
             ).fetchall()
         return [int(row[0]) for row in rows]
+
+    def should_poll_counts(self, client_id: str | None = None) -> dict[str, int]:
+        """How many finished jobs Riot accepted (shouldPoll=true) or rejected."""
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT should_poll, COUNT(*) AS n FROM jobs"
+                " WHERE should_poll IS NOT NULL"
+                + (" AND client_id=?" if client_id else "")
+                + " GROUP BY should_poll",
+                (client_id,) if client_id else (),
+            ).fetchall()
+        counts = {"true": 0, "false": 0}
+        for row in rows:
+            key = "true" if int(row["should_poll"]) else "false"
+            counts[key] += int(row["n"])
+        return counts
 
     def dead_error_counts(self, client_id: str | None = None) -> dict[str, int]:
         with self.lock:
