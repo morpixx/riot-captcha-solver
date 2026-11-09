@@ -102,22 +102,10 @@ python scripts/check_status.py --store data/input/accounts-test.jsonl
 6. Опционально поднимает ngrok.
 7. Запускает `python server.py` (или в фоне при `FOREGROUND=0`).
 
-## GitHub
+## Секреты
 
-Секреты исключены `.gitignore`: `.env`, `accounts*.jsonl`, прокси,
-`data/output`, `jobs.sqlite3`, `.cache`.
-
-```bash
-git init
-git add .
-git status
-git commit -m "Riot email automation"
-git branch -M main
-git remote add origin https://github.com/USER/REPO.git
-git push -u origin main
-```
-
-Не коммить реальный токен `deploy/ngrok.yml`.
+`.env`, `accounts*.jsonl`, прокси, `data/output`, `jobs.sqlite3` и `.cache`
+исключены `.gitignore`. Не коммить реальный токен `deploy/ngrok.yml`.
 
 ## Аккаунты
 
