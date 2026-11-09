@@ -12,14 +12,16 @@
 
 - Headless Camoufox с fingerprint Windows, GeoIP по exit-IP прокси и
   отключённым WebRTC.
-- Минт hCaptcha-токена в изолированном world страницы, без обхода CSP
-  через внешние скрипты.
+- Submit через родной виджет Riot: заполнение email и клик по
+  `SAVE AND VERIFY` на странице; hCaptcha n-token создаёт сама страница.
+  Отдельный invisible-минтер остаётся для dry-run.
 - SQLite-очередь: параллелизм, ретраи, идемпотентность по `external_id`,
   отмена job'а, статистика.
 - Webhook на том же порту: терминальные события пишутся в
   `data/output/webhook-results.jsonl`, отдельный приёмник не нужен.
-- Оптимизация ресурсов Camoufox: Firefox-prefs, блокировка тяжёлых
-  запросов, humanized-курсор, memory guard.
+- Оптимизация ресурсов Camoufox: Firefox-prefs, humanized-курсор, memory
+  guard; блокировка тяжёлых запросов включается через
+  `CAMOUFOX_BLOCK_RESOURCES=1`.
 - Запуск нативно (Linux/macOS/Windows), в Docker и на удалённом сервере
   через ngrok.
 
@@ -59,6 +61,32 @@ curl http://127.0.0.1:8000/api/v1/health
 `scripts/start.ps1` поднимает локальный API без туннеля. Для публичного
 доступа на Windows используй Docker, ngrok вручную или WSL.
 
+### Проверка одного аккаунта
+
+Сначала обнови cookies через `relogin`, иначе будет `Riot session is not valid`.
+
+```bash
+# headless + hCaptcha, без POST
+python scripts/check_one.py --label test-01
+
+# реальный POST и shouldPoll
+python scripts/check_one.py --label test-01 --submit
+```
+
+В логе должно быть `headless=True`; в JSON — `shouldPoll: true/false/null`.
+`--headed` показывает окно, `--email`/`--proxy`/`--store` переопределяют
+параметры. Без `--submit` почта не меняется.
+
+Аудит всех аккаунтов без POST:
+
+```bash
+python scripts/check_status.py --store data/input/accounts-test.jsonl
+```
+
+Если `email_status=not_validated`, сначала подтверди **текущий** email Riot —
+иначе `shouldPoll` всегда будет `false`. Job с `submit` проверяет это до
+hCaptcha и завершается с `error_code=email_not_verified`, не тратя токен.
+
 ### Публичный доступ через ngrok
 
 ```bash
@@ -96,14 +124,15 @@ curl http://127.0.0.1:8000/api/v1/health
 2. Job попадает в SQLite-очередь; cookies и прокси остаются только в
    памяти и не пишутся в БД.
 3. Camoufox открывает Riot, проверяет сессию, подставляет exit-IP прокси,
-   минтит hCaptcha-токен и отправляет запрос смены почты.
+   заполняет email и нажимает `SAVE AND VERIFY`; hCaptcha-токен создаёт родной
+   виджет страницы, затем уходит POST смены почты.
 4. Терминальный статус (`succeeded`, `dead`, `canceled`, `needs_resubmit`)
    уходит в webhook или в same-port журнал.
 5. Если Riot просит подтвердить email, подтверждение выполняется отдельно.
 
-Проект не обходит hCaptcha: он получает токен в браузере и передаёт его
-Riot. Качество прокси и актуальность cookies влияют на результат сильнее
-всего остального.
+Проект не обходит hCaptcha: он получает токен в браузере через родной
+виджет Riot и передаёт его Riot. Качество прокси и актуальность cookies
+влияют на результат сильнее всего остального.
 
 ## API
 
@@ -151,8 +180,8 @@ python scripts/submit_accounts.py \
 | `BIND_HOST` | `127.0.0.1` | интерфейс API; `0.0.0.0` — только осознанно |
 | `PORT` | `8000` | порт API |
 | `API_KEY` / `API_KEYS` | — | ключ клиента / несколько клиентов |
-| `MAX_WORKERS` | `5` в `.env.example`; `10` в `start.sh`; `4` в Docker | одновременные браузеры |
-| `MIN_FREE_MB` | `2048` / `660` / `1024` | memory guard перед стартом job'а |
+| `MAX_WORKERS` | `5` в `.env.example`; `6` в `start.sh`; `4` в Docker | одновременные браузеры |
+| `MIN_FREE_MB` | `2048` / `1500` / `1500` | memory guard перед стартом job'а |
 | `MAX_QUEUE` | `5000` | максимум job'ов в очереди |
 | `BATCH_MAX` | `500` | максимум job'ов в одном POST |
 | `JOB_ATTEMPTS` | `3` | попытки на job |
@@ -166,9 +195,10 @@ python scripts/submit_accounts.py \
 | `NGROK_AUTHTOKEN` | — | токен ngrok для `start.sh` |
 | `START_TUNNEL` | `0` локально, `1` на Kaggle | публичный ngrok-туннель |
 
-`scripts/start.sh` по умолчанию берёт 10 воркеров и `MIN_FREE_MB=660` —
-это агрессивный режим для 16 ГБ. Для 8 ГБ поставь `MAX_WORKERS=4` и
-`MIN_FREE_MB=1536`. Docker по умолчанию использует 4/1024.
+`scripts/start.sh` по умолчанию берёт 6 воркеров и `MIN_FREE_MB=1500` —
+это расчёт на ~1.3–1.5 ГБ пика на один Camoufox. Для 8 ГБ поставь
+`MAX_WORKERS=4`.
+Docker по умолчанию использует 4/1500.
 
 ## Данные
 
@@ -183,18 +213,20 @@ python scripts/submit_accounts.py \
 
 ```text
 .
-├─ server.py                 # FastAPI: auth, jobs, webhook, stats
-├─ cookie_extractor.py       # ручной вход, cookies, relogin, add
+├─ server.py                 # сборка FastAPI и endpoints
+├─ cookie_extractor.py       # тонкая точка входа extractor
 ├─ src/
-│  ├─ api/                   # Pydantic-схемы и HTTP-слой
-│  ├─ jobs/                  # очередь, dispatcher, batch, результаты
-│  ├─ riot/                  # flow, minter hCaptcha, контракт Riot
+│  ├─ api/                   # схемы, auth, webhook, ответы
+│  ├─ jobs/                  # очередь, SQLite store, payload, результаты
+│  ├─ riot/                  # flow, навигация, состояние, email-форма, minter
 │  ├─ browser/               # Camoufox backend и resource tuning
 │  ├─ proxy/                 # разбор/проверка прокси
-│  └─ extractor/             # cookie extractor и CLI
+│  └─ extractor/             # команды, пул прокси, данные и CLI
 ├─ scripts/
 │  ├─ start.sh               # универсальный launcher (Linux/macOS)
 │  ├─ start.ps1              # Windows launcher
+│  ├─ check_one.py           # smoke-тест одного аккаунта
+│  ├─ check_status.py        # read-only аудит email_status
 │  ├─ submit_accounts.py     # построчная отправка аккаунтов
 │  ├─ webhook_receiver.py    # локальный приёмник webhook
 │  └─ client_example.py      # пример клиента
@@ -224,7 +256,7 @@ python -m pytest -q
 python -m ruff check .
 ```
 
-В текущей версии: **113 passed**, `ruff` без замечаний.
+В текущей версии: **120 passed**, `ruff` без замечаний.
 
 ## Безопасность
 
@@ -265,6 +297,4 @@ git push -u origin main
 
 ## Лицензия
 
-Лицензия не указана. Если репозиторий публичный, добавь `LICENSE`
-(например, MIT или Apache-2.0). Без файла лицензии код по умолчанию
-распространяется как all rights reserved.
+MIT — см. [LICENSE](LICENSE).

@@ -1,8 +1,7 @@
-"""Command-line parser and interactive menu for cookie_extractor.
+"""argparse layer and interactive menu for cookie_extractor.
 
-Kept separate from the command implementations so the top-level script stays
-focused on account/proxy work. Importing this module is safe: it uses the
-fully initialized cookie_extractor module.
+The command implementations live in commands.py; this module only turns
+flags and menu choices into calls. Importing it has no side effects.
 """
 
 from __future__ import annotations
@@ -13,15 +12,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from cookie_extractor import (
-    DEFAULT_DOMAIN,
-    DEFAULT_LOGIN_URL,
-    DEFAULT_PROXY_TEST_URL,
-    DEFAULT_SESSION_COOKIE,
-    DEFAULT_STORE,
-    DEFAULT_TIMEOUT,
-    CookieStore,
-    ExtractorError,
+from src.config import DATA_INPUT
+from src.console import configure_utf8_stdio
+
+from .browser import DEFAULT_LOGIN_URL, DEFAULT_TIMEOUT
+from .commands import (
     _collect_account,
     _resolve_account_proxy,
     cmd_add,
@@ -32,13 +27,21 @@ from cookie_extractor import (
     cmd_proxy_scan,
     cmd_relogin,
     cmd_remove,
+)
+from .data import (
+    DEFAULT_DOMAIN,
+    DEFAULT_SESSION_COOKIE,
+    DEFAULT_STORE,
+    CookieStore,
+    ExtractorError,
+    next_label,
+)
+from .proxies import (
+    DEFAULT_PROXY_TEST_URL,
     default_auto_proxy_pool,
     default_proxy_pool,
-    next_label,
-    print_accounts,
-    prompt,
 )
-from src.config import DATA_INPUT
+from .ui import print_accounts, prompt
 
 
 def _add_proxy_args(parser: argparse.ArgumentParser) -> None:
@@ -57,8 +60,8 @@ def _add_proxy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-proxy-latency",
         type=float,
-        default=3.0,
-        help="удалять proxy, если проверка грузится дольше N секунд (0 = без лимита)",
+        default=8.0,
+        help="удалять proxy, если проверка грузится дольше N секунд (0 = без лимита; 8)",
     )
     parser.add_argument("--proxy-workers", type=int, default=24, help=argparse.SUPPRESS)
     parser.add_argument(
@@ -158,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--batch-size", type=int, default=64, help="сколько proxy проверять за батч")
     scan.add_argument("--proxy-test-url", default=DEFAULT_PROXY_TEST_URL)
     scan.add_argument("--proxy-timeout", type=float, default=8.0)
-    scan.add_argument("--max-proxy-latency", type=float, default=3.0)
+    scan.add_argument("--max-proxy-latency", type=float, default=8.0)
     scan.add_argument("--proxy-workers", type=int, default=24, help=argparse.SUPPRESS)
     scan.set_defaults(func=cmd_proxy_scan)
 
@@ -352,6 +355,7 @@ def _interactive(store_path: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         try:

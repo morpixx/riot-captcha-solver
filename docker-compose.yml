@@ -13,7 +13,7 @@ services:
       HEADLESS: "1"
       JOBS_DB: /app/data/jobs.sqlite3
       MAX_WORKERS: "${DOCKER_MAX_WORKERS:-4}"
-      MIN_FREE_MB: "${DOCKER_MIN_FREE_MB:-1024}"
+      MIN_FREE_MB: "${DOCKER_MIN_FREE_MB:-1500}"
     ports:
       - "${RIOT_PORT:-8000}:8000"
     volumes:

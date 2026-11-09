@@ -227,8 +227,11 @@ X-API-Key: <API_KEY>
 
 `error_code`: `session_invalid` (cookies невалидны), `proxy_error` (прокси
 недоступен), `captcha_failed`, `timeout`, `browser_fingerprint`, `unknown`,
-`payload_missing` (cookies потеряны после рестарта), `email_change_not_accepted`
-(Riot ответил `shouldPoll=false`; подтвердите текущий/pending-адрес).
+`payload_missing` (cookies потеряны после рестарта), `email_not_verified`
+(текущий email не подтверждён; job не дошёл до hCaptcha), `email_change_pending`
+(у аккаунта уже есть pending-смена; подтвердите её или дождитесь истечения),
+`email_change_not_accepted` (Riot ответил `shouldPoll=false`; подтвердите
+текущий/pending-адрес).
 
 HTTP-коды: `400` — неверный прокси/email; `401` — ключ; `404` — чужая/неизвестная
 джоба; `409` — конфликт отмены; `413` — слишком большая пачка; `422` — битый JSON;

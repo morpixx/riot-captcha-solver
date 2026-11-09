@@ -41,7 +41,7 @@ curl http://127.0.0.1:8000/api/v1/health
 | `BIND_HOST` | `0.0.0.0` | адрес внутри контейнера (принудительно) |
 | `PORT` | `8000` | порт uvicorn внутри контейнера |
 | `DOCKER_MAX_WORKERS` | `4` | одновременных Camoufox |
-| `DOCKER_MIN_FREE_MB` | `1024` | минимум свободной RAM для старта job'а |
+| `DOCKER_MIN_FREE_MB` | `1500` | минимум свободной RAM для старта job'а |
 | `JOBS_DB` | `/app/data/jobs.sqlite3` | SQLite внутри volume |
 | `HEADLESS` | `1` | headless-режим |
 

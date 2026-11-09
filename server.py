@@ -48,13 +48,9 @@ SQLite (jobs.sqlite3) хранит только метаданные job'ов, �
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
 import logging
 import os
 import sys
-import threading
 import time
 import traceback
 import uuid
@@ -64,22 +60,19 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlsplit
 
 import requests
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
-from starlette.concurrency import run_in_threadpool
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 if str(ROOT) not in sys.path:  # запуск из любого каталога: python D:\project\server.py
     sys.path.insert(0, str(ROOT))
 
+from src.api.auth import api_key_dependency, load_api_keys
 from src.api.models import (
-    Cookie,  # noqa: F401 - kept in server's historical import surface
     JobsListResponse,
     JobSpecRequest,
     JobsSubmitRequest,
@@ -87,9 +80,9 @@ from src.api.models import (
     JobView,
     RunRequest,
     RunResponse,
-    SubmitError,  # noqa: F401 - kept in server's historical import surface
-    clean_webhook_url,
 )
+from src.api.run import build_response
+from src.api.webhook_receiver import handle_webhook
 from src.api.webhooks import WebhookDispatcher, WebhookSettings
 from src.config import Account, Config, env_flag, load_flow_config
 from src.jobs.queue import (
@@ -102,7 +95,6 @@ from src.jobs.queue import (
     QueueFull,
     RateLimited,
 )
-from src.jobs.result import interpret_result
 from src.jobs.runner import run_account
 from src.proxy.proxy import describe, parse_proxy
 from src.security import email_domain, email_tag, mask_proxy, redact, safe_error
@@ -118,7 +110,6 @@ ALLOW_NO_PROXY = env_flag("ALLOW_NO_PROXY")
 ALLOW_SHARED_PROXY_TEST = env_flag("ALLOW_SHARED_PROXY_TEST")
 WEBHOOK_PROXY_URL = os.getenv("WEBHOOK_PROXY_URL", "").strip()
 WEBHOOK_JOURNAL = ROOT / "data" / "output" / "webhook-results.jsonl"
-_webhook_journal_lock = threading.Lock()
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -139,37 +130,12 @@ if WEBHOOK_URL and not WEBHOOK_URL.startswith(("http://", "https://")):
     raise RuntimeError("WEBHOOK_URL must start with http:// or https://")
 
 
-def _load_api_keys() -> dict[str, str]:
-    raw = os.getenv("API_KEYS", "").strip()
-    if raw:
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"API_KEYS must be valid JSON: {exc}") from exc
-        if not isinstance(data, dict) or not data:
-            raise RuntimeError("API_KEYS must be a non-empty JSON object {key: client_id}")
-        return {str(key): str(client) for key, client in data.items()}
-    if API_KEY:
-        return {API_KEY: "default"}
-    return {}
-
-
-API_KEYS_MAP = _load_api_keys()
+API_KEYS_MAP = load_api_keys(API_KEY, os.getenv("API_KEYS", ""))
 DOCS_ENABLED = env_flag("ENABLE_DOCS", default=True)
 
 
 def _ts() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _email_tag(email: str) -> str:
-    """Backward-compatible alias for the shared log-safe identifier."""
-    return email_tag(email)
-
-
-def _clean_webhook_url(value: str | None) -> str | None:
-    """Backward-compatible alias for the API schema validator."""
-    return clean_webhook_url(value)
 
 
 # The server does not use accounts.json; every request carries its own account.
@@ -273,19 +239,7 @@ app = FastAPI(
 # --------------------------------------------------------------------------- #
 
 
-def require_client(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> str:
-    """Возвращает client_id по ключу; при пустом API_KEYS/API_KEY доступ открыт."""
-    if not API_KEYS_MAP:
-        return "anonymous"
-    if x_api_key:
-        for key, client_id in API_KEYS_MAP.items():
-            if hmac.compare_digest(x_api_key.encode(), key.encode()):
-                return client_id
-    raise HTTPException(
-        status_code=401,
-        detail="invalid or missing X-API-Key",
-        headers={"WWW-Authenticate": "X-API-Key"},
-    )
+require_client = api_key_dependency(lambda: API_KEYS_MAP)
 
 
 def execute_run(
@@ -300,20 +254,6 @@ def execute_run(
     loads, so a browser-level retry is not part of the flow.
     """
     return run_account(flow_cfg, account, proxy, headless)
-
-
-def build_response(result: Any) -> RunResponse:
-    if not isinstance(result, dict):
-        return RunResponse(status=500, error=redact(f"unexpected run() result: {result!r}"))
-
-    outcome = interpret_result(result)
-    return RunResponse(
-        shouldPoll=outcome.should_poll,
-        status=result.get("status"),
-        error_code=outcome.error_code,
-        error=redact(outcome.error) if outcome.error else None,
-        details=outcome.details,
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -356,125 +296,21 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 # Эндпоинты
 # --------------------------------------------------------------------------- #
 
-_HOP_HEADERS = {
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-    "host",
-    "content-length",
-}
-
-
-def _is_local_webhook_target(url: str) -> bool:
-    parsed = urlsplit(url)
-    return parsed.scheme in ("http", "https") and parsed.hostname in (
-        "127.0.0.1",
-        "localhost",
-        "::1",
-    )
-
-
-def _is_self_webhook_target(url: str) -> bool:
-    return urlsplit(url).path.rstrip("/") == "/api/v1/webhook"
-
-
-def _store_webhook_payload(body: bytes) -> None:
-    """Append one terminal webhook payload to the local JSONL journal."""
-    payload = json.loads(body.decode("utf-8"))
-    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    WEBHOOK_JOURNAL.parent.mkdir(parents=True, exist_ok=True)
-    with (
-        _webhook_journal_lock,
-        WEBHOOK_JOURNAL.open("a", encoding="utf-8", newline="\n") as handle,
-    ):
-        handle.write(line + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
-def _verify_webhook_signature(request: Request, body: bytes) -> None:
-    if not WEBHOOK_SECRET:
-        return
-    provided = request.headers.get("X-Webhook-Signature", "").strip()
-    expected = (
-        "sha256=" + hmac.new(WEBHOOK_SECRET.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    )
-    if not hmac.compare_digest(provided, expected):
-        raise HTTPException(status_code=401, detail="invalid webhook signature")
-
-
 @app.post("/api/v1/webhook")
 async def webhook_receiver(request: Request) -> Response:
     """Receive a terminal webhook on the same port as the API.
 
-    If WEBHOOK_PROXY_URL is empty (default), the payload is appended to
-    data/output/webhook-results.jsonl and the endpoint returns 200. If it is
-    set, the payload is forwarded to that localhost receiver instead. This
-    lets one public URL serve both API and webhook traffic.
+    With WEBHOOK_PROXY_URL empty (default) the payload is appended to
+    data/output/webhook-results.jsonl; otherwise it is forwarded to that
+    localhost receiver. One public URL then serves API and webhook traffic.
     """
     body = await request.body()
-    if len(body) > 2_000_000:
-        raise HTTPException(status_code=413, detail="webhook payload too large")
-    _verify_webhook_signature(request, body)
-
-    if not WEBHOOK_PROXY_URL:
-        try:
-            await run_in_threadpool(_store_webhook_payload, body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="webhook payload must be JSON",
-            ) from exc
-        except OSError as exc:
-            log.error("[%s] WEBHOOK journal write failed: %s", _ts(), exc)
-            raise HTTPException(status_code=500, detail="could not store webhook payload") from exc
-        try:
-            journal = str(WEBHOOK_JOURNAL.relative_to(ROOT))
-        except ValueError:
-            journal = str(WEBHOOK_JOURNAL)
-        log.info("[%s] WEBHOOK stored -> %s", _ts(), journal)
-        return JSONResponse({"ok": True, "stored": True, "file": journal})
-
-    if not _is_local_webhook_target(WEBHOOK_PROXY_URL):
-        raise HTTPException(
-            status_code=503,
-            detail="WEBHOOK_PROXY_URL must point to localhost",
-        )
-    if _is_self_webhook_target(WEBHOOK_PROXY_URL):
-        raise HTTPException(
-            status_code=503,
-            detail="WEBHOOK_PROXY_URL must not point back to /api/v1/webhook",
-        )
-    headers = {
-        key: value for key, value in request.headers.items() if key.lower() not in _HOP_HEADERS
-    }
-    try:
-        upstream = await run_in_threadpool(
-            requests.post,
-            WEBHOOK_PROXY_URL,
-            data=body,
-            headers=headers,
-            timeout=10,
-        )
-    except requests.RequestException as exc:
-        log.warning("[%s] WEBHOOK proxy unavailable: %s", _ts(), type(exc).__name__)
-        return JSONResponse(
-            status_code=502,
-            content={"detail": "local webhook receiver is unavailable"},
-        )
-    response_headers = {}
-    content_type = upstream.headers.get("content-type")
-    if content_type:
-        response_headers["content-type"] = content_type
-    return Response(
-        content=upstream.content,
-        status_code=upstream.status_code,
-        headers=response_headers,
+    return await handle_webhook(
+        body,
+        request.headers,
+        secret=WEBHOOK_SECRET,
+        proxy_url=WEBHOOK_PROXY_URL,
+        journal=WEBHOOK_JOURNAL,
     )
 
 
@@ -517,7 +353,7 @@ def run_endpoint(req: RunRequest, client_id: str = Depends(require_client)) -> R
         "[%s] RUN client=%s account=%s domain=%s proxy=%s headless=%s",
         _ts(),
         client_id,
-        _email_tag(email),
+        email_tag(email),
         email_domain(email),
         describe(proxy),
         req.headless,
@@ -544,13 +380,13 @@ def run_endpoint(req: RunRequest, client_id: str = Depends(require_client)) -> R
             "[%s] RUN timeout after %ss account=%s (%.1fs)",
             _ts(),
             RUN_TIMEOUT,
-            _email_tag(email),
+            email_tag(email),
             time.perf_counter() - started,
         )
         return RunResponse(status=504, error=f"run timed out after {RUN_TIMEOUT}s")
     except Exception as exc:
         error = safe_error(exc, req.proxy)
-        log.error("[%s] RUN failed account=%s: %s", _ts(), _email_tag(email), error)
+        log.error("[%s] RUN failed account=%s: %s", _ts(), email_tag(email), error)
         log.debug(
             "[%s] RUN traceback: %s",
             _ts(),
@@ -562,7 +398,7 @@ def run_endpoint(req: RunRequest, client_id: str = Depends(require_client)) -> R
     log.info(
         "[%s] DONE account=%s status=%s shouldPoll=%s in %.1fs%s",
         _ts(),
-        _email_tag(email),
+        email_tag(email),
         response.status,
         response.shouldPoll,
         time.perf_counter() - started,

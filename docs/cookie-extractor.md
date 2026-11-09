@@ -206,7 +206,7 @@ python cookie_extractor.py assign-proxies --store data/input/accounts.jsonl \
 Полезные флаги:
 
 - `--proxy-timeout 8` — сколько ждать проверку одного proxy;
-- `--max-proxy-latency 3` — не брать proxy, если HTTP-проверка дольше 3 с
+- `--max-proxy-latency 8` — не брать proxy, если HTTP-проверка дольше 8 с
   (0 = без лимита);
 - `--max-page-load 30` — считать proxy медленным, если страница входа
   грузилась дольше 30 с (0 = без лимита);
@@ -324,7 +324,7 @@ python cookie_extractor.py export --format batch --out batch.json
   Это только для локальных тестов; после теста верните `ALLOW_NO_PROXY=0`.
 - **Плохие proxy удаляются сами.** При старте `add-batch` выкидывает из
   `data/input/proxies-working.txt`/`data/input/proxies-good.txt` всё, что не прошло проверку или
-  грузится дольше 3 секунд. Если выбранный proxy дал Cloudflare-блок,
+  грузится дольше 8 секунд. Если выбранный proxy дал Cloudflare-блок,
   ошибку соединения или страница через него грузилась дольше
   `--max-page-load` (по умолчанию 30 с), он удаляется из рабочего списка и
   пишется в `data/input/proxies-bad.txt`; при следующем запуске он больше не выбирается.

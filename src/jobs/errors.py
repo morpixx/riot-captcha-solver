@@ -1,6 +1,30 @@
-"""Error classification for retry decisions."""
+"""Domain errors and error classification for retry decisions."""
 
 from __future__ import annotations
+
+
+class QueueFull(Exception):
+    """Raised when the queue cannot accept more jobs."""
+
+
+class RateLimited(Exception):
+    """Raised when one client exceeds the submission rate limit."""
+
+    def __init__(self, retry_after: int):
+        self.retry_after = max(1, retry_after)
+        super().__init__(f"rate limited, retry after {self.retry_after}s")
+
+
+class NotFound(Exception):
+    """Raised when a job does not exist for the requesting client."""
+
+
+class Conflict(Exception):
+    """Raised when a job cannot move to the requested status."""
+
+
+class PayloadMissing(Exception):
+    """The job row exists, but its cookies are no longer in memory."""
 
 
 def classify_error(exc: BaseException) -> tuple[str, bool]:
@@ -11,6 +35,10 @@ def classify_error(exc: BaseException) -> tuple[str, bool]:
         return "browser_fingerprint", True
     if "session is not valid" in msg or "left the riot account origin" in msg:
         return "session_invalid", False
+    if "email is not verified" in msg:
+        return "email_not_verified", False
+    if "pending email change" in msg or "email_verification_pending" in msg:
+        return "email_change_pending", False
     if "hcaptcha issued no token" in msg or "unusable token" in msg or "no token" in msg:
         return "captcha_failed", True
     proxy_markers = (

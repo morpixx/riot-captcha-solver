@@ -1,10 +1,14 @@
-"""Mint an hCaptcha token on the Riot page.
+"""Mint an hCaptcha token on the Riot page (dry-run / diagnostics).
 
 Camoufox runs page.evaluate in an isolated world where eval is not subject to
 the document CSP (verified against Riot and a strict-CSP page).  That is what
 replaces the old Chromium bypass_csp flag: hCaptcha api.js is fetched and
 evaluated in that world, while the widget renders a real iframe in the page
 DOM and delivers its callback there.
+
+For a real submit, src/riot/flow.py uses Riot's own SAVE AND VERIFY button
+instead.  Riot accepts the n-token from the page's hCaptcha widget and rejects
+tokens minted by this separate invisible widget with HTTP 200/shouldPoll=false.
 """
 
 from __future__ import annotations

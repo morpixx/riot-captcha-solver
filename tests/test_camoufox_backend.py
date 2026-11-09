@@ -16,9 +16,11 @@ from src.browser.camoufox_boost import (
 from src.browser.camoufox_browser import _headless_mode, _proxy_url
 from src.config import Account, Config
 from src.jobs.errors import classify_error
+from src.riot import email_form
 from src.riot import flow as riot_flow
-from src.riot.flow import _on_host, _session_is_rejected
 from src.riot.minter import _token_problem
+from src.riot.navigation import on_host
+from src.riot.state import email_verification_problem, session_is_rejected
 
 
 def test_browser_package_is_camoufox_only():
@@ -98,29 +100,64 @@ def test_booster_keeps_captcha_and_riot_assets(url, resource_type):
 
 
 def test_host_match_ignores_query_string_and_subdomains():
-    assert _on_host(
+    assert on_host(
         "https://account.riotgames.com/?next=https://authenticate.riotgames.com",
         "account.riotgames.com",
     )
-    assert _on_host("https://account.riotgames.com/", "account.riotgames.com")
-    assert _on_host("https://sub.account.riotgames.com/", "account.riotgames.com")
-    assert not _on_host("https://authenticate.riotgames.com/", "account.riotgames.com")
-    assert not _on_host("https://account.riotgames.com.evil.test/", "account.riotgames.com")
+    assert on_host("https://account.riotgames.com/", "account.riotgames.com")
+    assert on_host("https://sub.account.riotgames.com/", "account.riotgames.com")
+    assert not on_host("https://authenticate.riotgames.com/", "account.riotgames.com")
+    assert not on_host("https://account.riotgames.com.evil.test/", "account.riotgames.com")
 
 
 def test_session_rejects_not_logged_in():
-    assert _session_is_rejected({"status": 401, "body": None}) is True
-    assert _session_is_rejected({"status": 403, "body": {"errorCode": "not_logged_in"}}) is True
+    assert session_is_rejected({"status": 401, "body": None}) is True
+    assert session_is_rejected({"status": 403, "body": {"errorCode": "not_logged_in"}}) is True
     assert (
-        _session_is_rejected({"status": 403, "body": {"error_code": "invalid_session_id"}}) is True
+        session_is_rejected({"status": 403, "body": {"error_code": "invalid_session_id"}}) is True
     )
 
 
 def test_session_keeps_ambiguous_answers():
-    assert _session_is_rejected(None) is False
-    assert _session_is_rejected({"status": 200, "body": {}}) is False
-    assert _session_is_rejected({"status": 404, "body": {"error": "not_found"}}) is False
-    assert _session_is_rejected({"status": 0, "error": "network"}) is False
+    assert session_is_rejected(None) is False
+    assert session_is_rejected({"status": 200, "body": {}}) is False
+    assert session_is_rejected({"status": 404, "body": {"error": "not_found"}}) is False
+    assert session_is_rejected({"status": 0, "error": "network"}) is False
+
+
+def test_email_verification_problem_detects_unverified_account():
+    problem = email_verification_problem(
+        {
+            "status": 200,
+            "body": {
+                "email": "CAC***@gm***.com",
+                "email_status": "not_validated",
+                "derived_states": ["email_verification"],
+            },
+        }
+    )
+    assert problem is not None
+    assert "not verified" in problem
+    assert "CAC***@gm***.com" in problem
+    assert "not_validated" in problem
+
+
+def test_email_verification_problem_ignores_valid_and_unknown_state():
+    assert email_verification_problem(None) is None
+    assert email_verification_problem({"status": 403, "body": {}}) is None
+    assert email_verification_problem({"status": 200, "body": {"email_status": "validated"}}) is None
+    assert email_verification_problem({"status": 200, "body": {}}) is None
+    assert email_verification_problem({"status": 200, "body": {"derived_states": ["mfa"]}}) is None
+
+
+def test_unverified_email_is_not_retryable():
+    code, retryable = classify_error(
+        RuntimeError(
+            "Riot email is not verified (CAC***@gm***.com, email_status=not_validated); "
+            "verify the current address before changing it"
+        )
+    )
+    assert (code, retryable) == ("email_not_verified", False)
 
 
 def test_origin_and_token_errors_are_classified():
@@ -176,12 +213,11 @@ def test_run_keeps_shouldpoll_as_is(monkeypatch):
     monkeypatch.setattr(riot_flow, "open_browser", fake_open)
     monkeypatch.setattr(riot_flow, "humanize_page", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        riot_flow,
-        "mint_in_page",
+        email_form,
+        "submit_via_ui",
         lambda *_args, **_kwargs: {
-            "token": "P1_test",
-            "host": "account.riotgames.com",
-            "csrf": "x",
+            "status": 200,
+            "body": {"message": "email_verification_sent", "shouldPoll": False},
         },
     )
 
@@ -209,3 +245,142 @@ def test_run_keeps_shouldpoll_as_is(monkeypatch):
     assert seen["headless"] is True
     assert result["shouldPoll"] is False
     assert result["body"]["shouldPoll"] is False
+
+
+class _UnverifiedPage(_FakePage):
+    def evaluate(self, *_args, **_kwargs) -> dict:
+        return {
+            "status": 200,
+            "body": {
+                "email": "CAC***@gm***.com",
+                "email_status": "not_validated",
+                "derived_states": ["email_verification"],
+            },
+        }
+
+
+def test_run_rejects_unverified_email_before_captcha(monkeypatch):
+    @contextmanager
+    def fake_open(cookies, **kwargs):
+        yield object(), _UnverifiedPage()
+
+    monkeypatch.setattr(riot_flow, "open_browser", fake_open)
+    monkeypatch.setattr(riot_flow, "humanize_page", lambda *_args, **_kwargs: None)
+
+    def must_not_mint(*_args, **_kwargs):
+        raise AssertionError("hCaptcha must not be minted for an unverified email")
+
+    monkeypatch.setattr(riot_flow, "mint_in_page", must_not_mint)
+
+    cfg = Config(
+        sitekey="sitekey",
+        host="account.riotgames.com",
+        headless=True,
+        allow_email_change=False,
+        captcha_timeout=1,
+        accounts=[],
+    )
+    account = Account(name="acc", cookies=[], new_email="new@example.com")
+
+    with pytest.raises(RuntimeError, match="not verified"):
+        riot_flow.run(
+            cfg,
+            account,
+            submit=True,
+            proxy=None,
+            log=lambda _message: None,
+        )
+
+
+def test_run_allows_dry_run_for_unverified_email(monkeypatch):
+    @contextmanager
+    def fake_open(cookies, **kwargs):
+        yield object(), _UnverifiedPage()
+
+    monkeypatch.setattr(riot_flow, "open_browser", fake_open)
+    monkeypatch.setattr(riot_flow, "humanize_page", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        riot_flow,
+        "mint_in_page",
+        lambda *_args, **_kwargs: {
+            "token": "P1_test",
+            "host": "account.riotgames.com",
+            "csrf": "x",
+        },
+    )
+
+    cfg = Config(
+        sitekey="sitekey",
+        host="account.riotgames.com",
+        headless=True,
+        allow_email_change=False,
+        captcha_timeout=1,
+        accounts=[],
+    )
+    account = Account(name="acc", cookies=[], new_email="new@example.com")
+
+    result = riot_flow.run(
+        cfg,
+        account,
+        submit=False,
+        proxy=None,
+        log=lambda _message: None,
+    )
+
+    assert result["dry_run"] is True
+    assert result["token_len"] == len("P1_test")
+
+
+class _PendingPage(_FakePage):
+    def evaluate(self, *_args, **_kwargs) -> dict:
+        return {
+            "status": 200,
+            "body": {
+                "email": "sil***@gm***.com",
+                "mode": "update",
+                "message": "email_verification_pending",
+            },
+        }
+
+
+def test_run_rejects_pending_change_before_ui(monkeypatch):
+    @contextmanager
+    def fake_open(cookies, **kwargs):
+        yield object(), _PendingPage()
+
+    monkeypatch.setattr(riot_flow, "open_browser", fake_open)
+    monkeypatch.setattr(riot_flow, "humanize_page", lambda *_args, **_kwargs: None)
+
+    def must_not_submit(*_args, **_kwargs):
+        raise AssertionError("UI submit must not run while a change is pending")
+
+    monkeypatch.setattr(email_form, "submit_via_ui", must_not_submit)
+
+    cfg = Config(
+        sitekey="sitekey",
+        host="account.riotgames.com",
+        headless=True,
+        allow_email_change=False,
+        captcha_timeout=1,
+        accounts=[],
+    )
+    account = Account(name="acc", cookies=[], new_email="new@example.com")
+
+    with pytest.raises(RuntimeError, match="pending email change"):
+        riot_flow.run(
+            cfg,
+            account,
+            submit=True,
+            proxy=None,
+            log=lambda _message: None,
+        )
+
+
+def test_pending_email_change_is_not_retryable():
+    code, retryable = classify_error(
+        RuntimeError(
+            "Riot already has a pending email change to sil***@gm***.com; "
+            "confirm it or wait for it to expire before submitting another"
+        )
+    )
+    assert (code, retryable) == ("email_change_pending", False)

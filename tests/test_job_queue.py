@@ -7,7 +7,8 @@ import time
 
 import src.jobs.queue as job_queue_module
 from src.config import Config
-from src.jobs.queue import JobQueue, JobSpec, _proxy_key
+from src.jobs.payload import proxy_key
+from src.jobs.queue import JobQueue, JobSpec
 from src.proxy.proxy import parse_proxy
 
 CFG = Config(
@@ -168,8 +169,8 @@ def test_legacy_succeeded_should_poll_false_is_resubmitted(tmp_path):
         assert queue.get(jobs[0].id, "client").status == "needs_resubmit"
 
         # Симулируем строку, созданную старой версией: false был записан как succeeded.
-        with queue._db_lock:
-            queue._db.execute(
+        with queue.store.lock:
+            queue.store.connection.execute(
                 "UPDATE jobs SET status='succeeded', error_code=NULL, error=NULL WHERE id=?",
                 (jobs[0].id,),
             )
@@ -294,9 +295,9 @@ def test_shared_proxy_test_mode_runs_concurrently(tmp_path):
 
 
 def test_proxy_key_separates_residential_sessions():
-    first = _proxy_key(parse_proxy("socks5://user:session-a@gw.example:1080"))
-    second = _proxy_key(parse_proxy("socks5://user:session-b@gw.example:1080"))
-    same = _proxy_key(parse_proxy("socks5://user:session-a@gw.example:1080"))
+    first = proxy_key(parse_proxy("socks5://user:session-a@gw.example:1080"))
+    second = proxy_key(parse_proxy("socks5://user:session-b@gw.example:1080"))
+    same = proxy_key(parse_proxy("socks5://user:session-a@gw.example:1080"))
 
     assert first == same
     assert first != second
@@ -413,8 +414,8 @@ def test_batch_stats_aggregate_duration(tmp_path):
 
 
 def test_proxy_key_separates_ports():
-    first = _proxy_key(parse_proxy("http://user:pass@gw.example:10100"))
-    second = _proxy_key(parse_proxy("http://user:pass@gw.example:10101"))
+    first = proxy_key(parse_proxy("http://user:pass@gw.example:10100"))
+    second = proxy_key(parse_proxy("http://user:pass@gw.example:10101"))
 
     assert first != second
 

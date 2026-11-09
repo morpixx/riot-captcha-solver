@@ -23,7 +23,7 @@ DEFAULT_TEST_URL = "https://account.riotgames.com/"
 DEFAULT_TIMEOUT = 8.0
 DEFAULT_TOP = 0
 DEFAULT_WORKERS = 24
-DEFAULT_MAX_LATENCY_MS = 3000.0
+DEFAULT_MAX_LATENCY_MS = 8000.0
 
 Log = Callable[[str], None]
 

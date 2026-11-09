@@ -323,7 +323,7 @@ def open_browser(
         with Camoufox(**options) as context:
             memory = _MemoryMonitor(profile, label or "browser")
             memory.start()
-            if env_flag("CAMOUFOX_BLOCK_RESOURCES", default=True):
+            if env_flag("CAMOUFOX_BLOCK_RESOURCES", default=False):
                 install_resource_blocking(context)
             if cookies:
                 context.add_cookies(cookies)

@@ -7,6 +7,8 @@ import json
 import pytest
 
 import cookie_extractor as ce
+import src.extractor.commands as commands
+import src.extractor.proxies as proxies
 
 
 def _cookie(name="ssid", value="secret", domain=".riotgames.com", path="/", **extra):
@@ -219,7 +221,7 @@ def test_add_batch_assigns_unique_proxies(monkeypatch, tmp_path):
         ProxyProbe("socks5://2.2.2.2:1080", "key-2", 20, 30),
         ProxyProbe("socks5://3.3.3.3:1080", "key-3", 30, 40),
     ]
-    monkeypatch.setattr(ce, "_rank_pool", lambda *a, **k: probes)
+    monkeypatch.setattr(proxies, "_rank_pool", lambda *a, **k: probes)
 
     seen = []
 
@@ -234,7 +236,7 @@ def test_add_batch_assigns_unique_proxies(monkeypatch, tmp_path):
             }
         )[0]
 
-    monkeypatch.setattr(ce, "_collect_account", fake_collect)
+    monkeypatch.setattr(commands, "_collect_account", fake_collect)
 
     args = Namespace(
         store=store_path,
@@ -253,7 +255,7 @@ def test_add_batch_assigns_unique_proxies(monkeypatch, tmp_path):
         timeout=30,
         headless=True,
     )
-    assert ce.cmd_add_batch(args) == 0
+    assert commands.cmd_add_batch(args) == 0
     assert [item[0] for item in seen] == ["acc-01", "acc-02"]
     assert [item[1] for item in seen] == ["socks5://1.1.1.1:1080", "socks5://2.2.2.2:1080"]
     assert len(ce.CookieStore(store_path).entries) == 2
@@ -282,7 +284,7 @@ def test_add_batch_reuses_one_proxy_for_every_account(monkeypatch, tmp_path):
             }
         )[0]
 
-    monkeypatch.setattr(ce, "_collect_account", fake_collect)
+    monkeypatch.setattr(commands, "_collect_account", fake_collect)
 
     proxy = "http://user:pass@1.1.1.1:8080"
     args = Namespace(
@@ -300,7 +302,7 @@ def test_add_batch_reuses_one_proxy_for_every_account(monkeypatch, tmp_path):
         headless=True,
     )
 
-    assert ce.cmd_add_batch(args) == 0
+    assert commands.cmd_add_batch(args) == 0
     assert [item[0] for item in seen] == ["fresh-01", "fresh-02", "fresh-03"]
     assert [item[1] for item in seen] == [proxy, proxy, proxy]
     assert len(ce.CookieStore(store_path).entries) == 3
@@ -320,7 +322,7 @@ def test_add_batch_rejects_proxy_and_no_proxy_together(tmp_path):
     )
 
     try:
-        ce.cmd_add_batch(args)
+        commands.cmd_add_batch(args)
     except ce.ExtractorError as exc:
         assert "--proxy и --no-proxy" in str(exc)
     else:
@@ -348,7 +350,7 @@ def test_cmd_add_auto_label_skips_used_proxy(monkeypatch, tmp_path):
         ProxyProbe("socks5://1.1.1.1:1080", proxy_key("socks5://1.1.1.1:1080"), 10, 20),
         ProxyProbe("socks5://2.2.2.2:1080", proxy_key("socks5://2.2.2.2:1080"), 20, 30),
     ]
-    monkeypatch.setattr(ce, "_rank_pool", lambda *a, **k: probes)
+    monkeypatch.setattr(proxies, "_rank_pool", lambda *a, **k: probes)
     seen = {}
 
     def fake_collect(store, **kwargs):
@@ -362,7 +364,7 @@ def test_cmd_add_auto_label_skips_used_proxy(monkeypatch, tmp_path):
             }
         )[0]
 
-    monkeypatch.setattr(ce, "_collect_account", fake_collect)
+    monkeypatch.setattr(commands, "_collect_account", fake_collect)
     args = Namespace(
         store=store_path,
         label=None,
@@ -384,7 +386,7 @@ def test_cmd_add_auto_label_skips_used_proxy(monkeypatch, tmp_path):
         timeout=30,
         headless=True,
     )
-    assert ce.cmd_add(args) == 0
+    assert commands.cmd_add(args) == 0
     assert seen["label"] == "acc-02"
     assert seen["proxy"] == "socks5://2.2.2.2:1080"
 
@@ -410,15 +412,15 @@ def test_add_batch_auto_continues_scanning(monkeypatch, tmp_path):
         ProxyProbe("socks5://3.3.3.3:1080", proxy_key("socks5://3.3.3.3:1080"), 30, 30),
         ProxyProbe("socks5://4.4.4.4:1080", proxy_key("socks5://4.4.4.4:1080"), 40, 40),
     ]
-    monkeypatch.setattr(ce, "DATA_INPUT", tmp_path)
-    monkeypatch.setattr(ce, "_rank_pool", lambda *a, **k: initial)
+    monkeypatch.setattr(proxies, "DATA_INPUT", tmp_path)
+    monkeypatch.setattr(proxies, "_rank_pool", lambda *a, **k: initial)
 
     def fake_scan(candidates, **kwargs):
         assert kwargs["need"] == 4
         assert len(kwargs["known"]) == 2
         return expanded
 
-    monkeypatch.setattr(ce, "scan_until", fake_scan)
+    monkeypatch.setattr(proxies, "scan_until", fake_scan)
     seen = []
 
     def fake_collect(store, **kwargs):
@@ -432,7 +434,7 @@ def test_add_batch_auto_continues_scanning(monkeypatch, tmp_path):
             }
         )[0]
 
-    monkeypatch.setattr(ce, "_collect_account", fake_collect)
+    monkeypatch.setattr(commands, "_collect_account", fake_collect)
 
     args = Namespace(
         store=tmp_path / "accounts.jsonl",
@@ -452,7 +454,7 @@ def test_add_batch_auto_continues_scanning(monkeypatch, tmp_path):
         timeout=30,
         headless=True,
     )
-    assert ce.cmd_add_batch(args) == 0
+    assert commands.cmd_add_batch(args) == 0
     assert len(seen) == 4
     assert len(ce.CookieStore(args.store).entries) == 4
     assert (tmp_path / "proxies-working.txt").read_text(encoding="utf-8").count("\n") == 4
@@ -480,14 +482,14 @@ def test_prune_and_remove_bad_proxy(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     good.write_text(proxy + "\nsocks5://3.3.3.3:1080\n", encoding="utf-8")
-    monkeypatch.setattr(ce, "DATA_INPUT", tmp_path)
+    monkeypatch.setattr(proxies, "DATA_INPUT", tmp_path)
 
-    ce._prune_proxy_file(working, {proxy_key(proxy)})
+    proxies._prune_proxy_file(working, {proxy_key(proxy)})
     assert "1.1.1.1" in working.read_text(encoding="utf-8")
     assert "2.2.2.2" not in working.read_text(encoding="utf-8")
     assert "# comment" in working.read_text(encoding="utf-8")
 
-    ce._mark_proxy_bad(working, proxy, "Cloudflare blocked")
+    proxies._mark_proxy_bad(working, proxy, "Cloudflare blocked")
     assert "1.1.1.1" not in working.read_text(encoding="utf-8")
     assert "1.1.1.1" not in good.read_text(encoding="utf-8")
     bad = (tmp_path / "proxies-bad.txt").read_text(encoding="utf-8")
@@ -498,21 +500,21 @@ def test_prune_and_remove_bad_proxy(tmp_path, monkeypatch):
 def test_load_bad_proxy_keys(tmp_path, monkeypatch):
     from src.proxy.pool import proxy_key
 
-    monkeypatch.setattr(ce, "DATA_INPUT", tmp_path)
+    monkeypatch.setattr(proxies, "DATA_INPUT", tmp_path)
     (tmp_path / "proxies-bad.txt").write_text(
         "socks5://1.1.1.1:1080\tcloudflare\nsocks5://2.2.2.2:1080\tproxy_error\n",
         encoding="utf-8",
     )
-    keys = ce._load_bad_proxy_keys()
+    keys = proxies._load_bad_proxy_keys()
     assert proxy_key("socks5://1.1.1.1:1080") in keys
     assert proxy_key("socks5://2.2.2.2:1080") in keys
 
 
 def test_proxy_failure_classification():
-    assert ce._is_proxy_failure("Cloudflare заблокировал IP proxy") is True
-    assert ce._is_proxy_failure("SOCKS connection refused") is True
-    assert ce._is_proxy_failure("не дождался входа за 900 с") is False
-    assert ce._is_proxy_failure("email уже используется") is False
+    assert proxies._is_proxy_failure("Cloudflare заблокировал IP proxy") is True
+    assert proxies._is_proxy_failure("SOCKS connection refused") is True
+    assert proxies._is_proxy_failure("не дождался входа за 900 с") is False
+    assert proxies._is_proxy_failure("email уже используется") is False
 
 
 def test_add_batch_no_proxy(monkeypatch, tmp_path):
@@ -533,7 +535,7 @@ def test_add_batch_no_proxy(monkeypatch, tmp_path):
             }
         )[0]
 
-    monkeypatch.setattr(ce, "_collect_account", fake_collect)
+    monkeypatch.setattr(commands, "_collect_account", fake_collect)
     args = Namespace(
         store=tmp_path / "accounts.jsonl",
         proxy_pool=None,
@@ -555,7 +557,7 @@ def test_add_batch_no_proxy(monkeypatch, tmp_path):
         headless=True,
         max_page_load=0,
     )
-    assert ce.cmd_add_batch(args) == 0
+    assert commands.cmd_add_batch(args) == 0
     assert [item["label"] for item in seen] == ["retest-01", "retest-02"]
     assert all(item["proxy"] == "" for item in seen)
     assert all(item["max_page_load"] == 0.0 for item in seen)
@@ -575,8 +577,8 @@ def test_assign_proxies_to_empty_entries(monkeypatch, tmp_path):
         ProxyProbe("socks5://1.1.1.1:1080", proxy_key("socks5://1.1.1.1:1080"), 10, 20),
         ProxyProbe("socks5://2.2.2.2:1080", proxy_key("socks5://2.2.2.2:1080"), 20, 30),
     ]
-    monkeypatch.setattr(ce, "_rank_pool", lambda *a, **k: probes)
-    monkeypatch.setattr(ce, "DATA_INPUT", tmp_path)
+    monkeypatch.setattr(proxies, "_rank_pool", lambda *a, **k: probes)
+    monkeypatch.setattr(proxies, "DATA_INPUT", tmp_path)
     args = Namespace(
         store=store_path,
         proxy_pool=tmp_path / "proxies-working.txt",
@@ -588,7 +590,7 @@ def test_assign_proxies_to_empty_entries(monkeypatch, tmp_path):
         max_proxy_latency=3.0,
         allow_unverified_proxy=False,
     )
-    assert ce.cmd_assign_proxies(args) == 0
+    assert commands.cmd_assign_proxies(args) == 0
     entries = ce.CookieStore(store_path).entries
     assert [entry["proxy"] for entry in entries] == [
         "socks5://1.1.1.1:1080",
@@ -628,7 +630,7 @@ def test_scan_from_args_forwards_only_scan_parameters(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr(ce, "scan_until", fake_scan)
+    monkeypatch.setattr(proxies, "scan_until", fake_scan)
     args = Namespace(
         batch_size=32,
         proxy_test_url="https://example.com/",
@@ -639,7 +641,7 @@ def test_scan_from_args_forwards_only_scan_parameters(monkeypatch):
         max_proxy_latency=1.5,
     )
 
-    ce._scan_from_args(["socks5://1.1.1.1:1080"], args, need=1)
+    proxies._scan_from_args(["socks5://1.1.1.1:1080"], args, need=1)
 
     assert captured["batch_size"] == 32
     assert captured["timeout"] == 2.0

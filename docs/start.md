@@ -42,6 +42,56 @@ NGROK_AUTHTOKEN=<token> bash scripts/start.sh
 
 Docker — отдельный вариант: [docker.md](docker.md).
 
+## Проверка одного аккаунта
+
+Сначала сделай relogin: старые cookies дадут `Riot session is not valid`, и
+`shouldPoll` ты не увидишь.
+
+```bash
+# 1. Headless + hCaptcha, без POST и без смены почты
+python scripts/check_one.py --label test-01
+
+# 2. Реальный POST: здесь и появится shouldPoll
+python scripts/check_one.py --label test-01 --submit
+```
+
+Скрипт берёт запись из `data/input/accounts-test.jsonl`, поднимает Camoufox
+с `headless=True` и печатает JSON. В логе ищи строку:
+
+```text
+[camoufox] account=test-01 headless=True geoip=proxy launch=...
+```
+
+Результат:
+
+- `shouldPoll: true` — Riot принял запрос и просит поллинг; это успех.
+- `shouldPoll: false` — HTTP 200, но смена не принята; в ответе будет
+  `error_code=email_change_not_accepted` и `message`.
+- `shouldPoll: null` — поля нет; смотри `status` и `error` (сессия, прокси,
+  hCaptcha, таймаут).
+
+`--headed` покажет окно для отладки, `--email` переопределит новый адрес,
+`--proxy` — прокси, `--store` — другой файл. Без `--submit` почта не
+меняется.
+
+### Аудит всех аккаунтов
+
+Read-only проверка статуса текущей почты без POST:
+
+```bash
+python scripts/check_status.py --store data/input/accounts-test.jsonl
+```
+
+Вывод показывает `email_status` и `derived_states`. Если у аккаунта
+`email_status=not_validated` и `derived_states=[email_verification]`, Riot не
+пропустит смену почты: сначала нужно подтвердить **текущий** email. `shouldPoll`
+у такого аккаунта будет `false`, сколько бы раз ни повторять запрос. Job с
+`submit` теперь проверяет это до hCaptcha и завершается с
+`error_code=email_not_verified`; dry-run по-прежнему можно прогнать.
+
+`--label test-01` — только один аккаунт, `--json` — машинный вывод,
+`--headed` — показать окно.
+
 ## Что делает скрипт
 
 1. `pip install -e .` (пин Camoufox — в `pyproject.toml`).
@@ -163,7 +213,7 @@ curl -H "X-API-Key: <ключ>" "http://127.0.0.1:8000/api/v1/jobs?limit=20"
 | `NGROK` | из `PATH` или `/tmp/ngrok` | путь к бинарнику ngrok |
 | `INSTALL_DEPS` | `1` | `0` — не ставить системные библиотеки |
 | `MAX_WORKERS` | `10` | одновременных браузеров |
-| `MIN_FREE_MB` | `660` | минимум свободной RAM для старта job'а |
+| `MIN_FREE_MB` | `1500` | минимум свободной RAM для старта job'а |
 | `API_KEY` | генерируется | фиксированный ключ клиента |
 | `WEBHOOK_SECRET` | генерируется | подпись webhook'ов |
 | `FOREGROUND` | `1` | `0` — API в фоне, ячейка/терминал свободны |
