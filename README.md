@@ -256,7 +256,7 @@ python -m pytest -q
 python -m ruff check .
 ```
 
-В текущей версии: **120 passed**, `ruff` без замечаний.
+В текущей версии: **126 passed**, `ruff` без замечаний.
 
 ## Безопасность
 
